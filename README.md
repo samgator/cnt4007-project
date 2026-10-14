@@ -4,7 +4,7 @@ A BitTorrent-like peer-to-peer (P2P) file sharing protocol implementation in Pyt
 
 ## Team Members
 - **Sam Morsics** - UFID: 85201061
-- **Bora Turkmen** - UFID: 
+- **Bora Turkmen** - UFID: 25221169
 - **Jayden Ollis** - UFID: 61598910
 
 ## Project Structure
