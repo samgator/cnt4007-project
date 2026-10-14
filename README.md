@@ -19,3 +19,5 @@ A BitTorrent-like peer-to-peer (P2P) file sharing protocol implementation in Pyt
 
 ## Getting Started
 This project requires Python 3.8+.
+
+To run a peer process, execute `./peerProcess <peerID>` (or `python3 peerProcess.py <peerID>`, or `peerProcess <peerID>` on Windows).
