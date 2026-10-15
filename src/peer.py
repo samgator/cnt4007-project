@@ -74,6 +74,35 @@ class PeerProcess:
         self.peer_writers: Dict[int, asyncio.StreamWriter] = {}
         self.peer_readers: Dict[int, asyncio.StreamReader] = {}
 
+        # Local pieces state
+        if self.my_info.has_file:
+            self.my_pieces: Set[int] = set(range(self.common_cfg.num_pieces))
+        else:
+            self.my_pieces: Set[int] = set()
+
+        # Neighbor pieces state
+        self.peer_pieces: Dict[int, Set[int]] = {}
+        for p in self.peer_info_list:
+            if p.peer_id != self.peer_id:
+                self.peer_pieces[p.peer_id] = (
+                    set(range(self.common_cfg.num_pieces)) if p.has_file else set()
+                )
+
+        # Choking and interest state
+        self.am_choking: Dict[int, bool] = {}
+        self.peer_choking_me: Dict[int, bool] = {}
+        self.am_interested: Dict[int, bool] = {}
+        self.peer_interested: Dict[int, bool] = {}
+        self.downloaded_bytes_in_interval: Dict[int, int] = {}
+
+        # Piece requesting state
+        self.pending_pieces: Set[int] = set()
+        self.neighbor_pending_piece: Dict[int, Optional[int]] = {}
+
+        # Periodic choking state
+        self.current_preferred: List[int] = []
+        self.current_optimistic: Optional[int] = None
+
         # Lifecycle and background tasks
         self.stop_event = asyncio.Event()
         self.server: Optional[asyncio.Server] = None
@@ -96,6 +125,13 @@ class PeerProcess:
         for target in self.prior_peers:
             task = asyncio.create_task(self._connect_to_prior_peer(target))
             self.background_tasks.append(task)
+
+        # 3. Start periodic timer tasks
+        self.background_tasks.append(asyncio.create_task(self._unchoking_interval_loop()))
+        self.background_tasks.append(asyncio.create_task(self._optimistic_unchoking_loop()))
+
+        # Check termination condition
+        self._check_network_termination()
 
         # Wait until termination condition triggers
         await self.stop_event.wait()
@@ -164,6 +200,60 @@ class PeerProcess:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+    async def _try_send_request(self, neighbor_id: int) -> None:
+        """Selects a piece randomly among pieces the neighbor has and requests it."""
+        if self.stop_event.is_set():
+            return
+        if neighbor_id not in self.connected_peers:
+            return
+        if self.peer_choking_me.get(neighbor_id, True):
+            return
+        if self.neighbor_pending_piece.get(neighbor_id) is not None:
+            # One piece requested at a time per peer (sequential lockstep, no pipelining)
+            return
+
+        # TODO: Calculate candidate pieces (neighbor_has - my_pieces - pending_pieces)
+        # TODO: Send MSG_REQUEST for a randomly chosen piece
+
+    async def _unchoking_interval_loop(self) -> None:
+        """Periodically reselects preferred neighbors every UnchokingInterval seconds."""
+        while not self.stop_event.is_set():
+            await asyncio.sleep(self.common_cfg.unchoking_interval)
+            if self.stop_event.is_set():
+                break
+
+            # TODO: Calculate download rates over the previous interval
+            # TODO: Select top k preferred neighbors among interested peers
+            # TODO: Send choke/unchoke messages accordingly
+
+    async def _optimistic_unchoking_loop(self) -> None:
+        """Periodically selects 1 choked but interested neighbor every OptimisticUnchokingInterval."""
+        while not self.stop_event.is_set():
+            await asyncio.sleep(self.common_cfg.optimistic_unchoking_interval)
+            if self.stop_event.is_set():
+                break
+
+            # TODO: Select 1 random choked but interested neighbor
+            # TODO: Unchoke the selected optimistic neighbor
+
+    def _check_network_termination(self) -> None:
+        """Checks if all peers in the network possess 100% of the pieces."""
+        if self.is_terminating or self.stop_event.is_set():
+            return
+
+        # Check local completion
+        if len(self.my_pieces) != self.common_cfg.num_pieces:
+            return
+
+        # Check all other peers completion
+        for pid in self.all_peer_ids:
+            if pid == self.peer_id:
+                continue
+            if len(self.peer_pieces.get(pid, set())) != self.common_cfg.num_pieces:
+                return
+
+        # TODO: Trigger graceful network shutdown once all peers have completed the file
 
     async def _shutdown(self) -> None:
         """Gracefully closes server, sockets, and logger."""
