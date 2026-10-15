@@ -20,3 +20,7 @@ test_run_*/
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+# Submission Artifacts
+commit_history.txt
+*.tar.gz
