@@ -124,3 +124,4 @@ def parse_bitfield(bf_bytes: bytes, num_pieces: int) -> Set[int]:
         if byte_idx < len(bf_bytes):
             if (bf_bytes[byte_idx] >> bit_idx) & 1:
                 pieces.add(p)
+    return pieces
