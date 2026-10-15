@@ -96,3 +96,31 @@ def make_request(piece_index: int) -> bytes:
 
 def make_piece(piece_index: int, piece_data: bytes) -> bytes:
     return encode_message(MSG_PIECE, struct.pack(">I", piece_index) + piece_data)
+
+
+def make_bitfield(pieces: Set[int], num_pieces: int) -> bytes:
+    """Generates bitfield bytes for a set of piece indices.
+    
+    Piece 0 is MSB of byte 0.
+    Piece 7 is LSB of byte 0.
+    Spare bits at the end of the last byte are set to 0.
+    """
+    num_bytes = math.ceil(num_pieces / 8)
+    bf = bytearray(num_bytes)
+    for p in pieces:
+        if 0 <= p < num_pieces:
+            byte_idx = p // 8
+            bit_idx = 7 - (p % 8)
+            bf[byte_idx] |= (1 << bit_idx)
+    return bytes(bf)
+
+
+def parse_bitfield(bf_bytes: bytes, num_pieces: int) -> Set[int]:
+    """Parses bitfield bytes into a set of piece indices."""
+    pieces = set()
+    for p in range(num_pieces):
+        byte_idx = p // 8
+        bit_idx = 7 - (p % 8)
+        if byte_idx < len(bf_bytes):
+            if (bf_bytes[byte_idx] >> bit_idx) & 1:
+                pieces.add(p)
