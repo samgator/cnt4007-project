@@ -7,15 +7,18 @@ Provides:
 """
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union
 
 try:
     from .config import CommonConfig, PeerInfo
     from .logger import PeerLogger
+    from .protocol import make_handshake, parse_handshake
 except ImportError:
     from config import CommonConfig, PeerInfo
     from logger import PeerLogger
+    from protocol import make_handshake, parse_handshake
 
 
 class PeerProcess:
@@ -56,6 +59,15 @@ class PeerProcess:
         # Initialize logging
         target_log_dir = log_dir if log_dir is not None else self.base_dir
         self.logger = PeerLogger(self.peer_id, log_dir=target_log_dir, verbose=self.verbose)
+        if not hasattr(self.logger, "_write_entry"):
+            def _fallback_write(msg: str, *args, **kwargs):
+                entry = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}: {msg}\n"
+                with self.logger._lock:
+                    self.logger._file.write(entry)
+                    self.logger._file.flush()
+                if self.logger.to_stdout:
+                    print(f"[{self.peer_id}] {entry.strip()}", flush=True)
+            self.logger._write_entry = _fallback_write
 
         # Connection and socket state
         self.connected_peers: Set[int] = set()
@@ -94,16 +106,27 @@ class PeerProcess:
         while not self.stop_event.is_set():
             try:
                 reader, writer = await asyncio.open_connection(target.hostname, target.port)
+
+                # Send 32-byte handshake
+                handshake_out = make_handshake(self.peer_id)
+                writer.write(handshake_out)
+                await writer.drain()
+
+                # Read 32-byte handshake
+                handshake_in = await reader.readexactly(32)
+                valid, remote_id = parse_handshake(handshake_in)
+                if not valid or remote_id != target.peer_id:
+                    writer.close()
+                    await writer.wait_closed()
+                    await asyncio.sleep(0.3)
+                    continue
+
+                # Log connection initiated
+                self.logger.log_connection_made(target.peer_id)
+
                 self.connected_peers.add(target.peer_id)
                 self.peer_readers[target.peer_id] = reader
                 self.peer_writers[target.peer_id] = writer
-                print(
-                    f"[{self.peer_id}] Connected to prior peer {target.peer_id} on {target.hostname}:{target.port}",
-                    flush=True,
-                )
-
-                # TODO: Exchange and validate 32-byte handshake
-                # TODO: Log connection initiated via self.logger.log_connection_made(target.peer_id)
                 break
             except (ConnectionRefusedError, OSError, asyncio.IncompleteReadError):
                 if self.stop_event.is_set():
@@ -115,11 +138,25 @@ class PeerProcess:
     ) -> None:
         """Handles an incoming TCP connection accepted by the server."""
         try:
-            peer_address = writer.get_extra_info("peername")
-            print(f"[{self.peer_id}] Incoming connection accepted from {peer_address}", flush=True)
+            # Read 32-byte handshake
+            handshake_in = await reader.readexactly(32)
+            valid, remote_id = parse_handshake(handshake_in)
+            if not valid or remote_id not in self.all_peer_ids:
+                writer.close()
+                await writer.wait_closed()
+                return
 
-            # TODO: Read handshake, validate remote peer ID, and send back reciprocal handshake
-            # TODO: Log connection received via self.logger.log_connection_received(remote_id)
+            # Send 32-byte handshake back
+            handshake_out = make_handshake(self.peer_id)
+            writer.write(handshake_out)
+            await writer.drain()
+
+            # Log connection received
+            self.logger.log_connection_received(remote_id)
+
+            self.connected_peers.add(remote_id)
+            self.peer_readers[remote_id] = reader
+            self.peer_writers[remote_id] = writer
         except Exception as e:
             print(f"[{self.peer_id}] Incoming connection exception: {type(e)} {e}", flush=True)
             try:
